@@ -8,6 +8,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Kelp Focus">
 <meta name="theme-color" content="#04121a">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="apple-touch-icon.png">
 <title>Kelp Focus</title>
 <style>
   :root { --bg:#04121a; --fg:#e6f4f1; --dim:#7fa3a8; --accent:#4fd1c5; --done:#f6c453; }
@@ -309,7 +311,8 @@
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
     set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
   };
-  const REDIRECT = location.origin + location.pathname;
+  // Always the same address however the page was opened (…/index.html, missing slash, etc.)
+  const REDIRECT = location.origin + location.pathname.replace(/index\.html$/, '').replace(/([^/])$/, '$1/');
   const SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative';
   const API = 'https://api.spotify.com/v1';
   const ICON = {
@@ -354,7 +357,7 @@
   async function handleRedirect() {
     const q = new URLSearchParams(location.search);
     if (!q.has('code') && !q.has('error')) return;
-    history.replaceState(null, '', location.pathname); // clean the URL
+    history.replaceState(null, '', REDIRECT); // clean the URL
     if (q.get('error')) { msg('Spotify login was cancelled.'); return; }
     if (q.get('state') !== ls.get('sp.state') || !ls.get('sp.verifier')) {
       msg('Login finished in a different window. Tap Connect Spotify again from here.'); return;
