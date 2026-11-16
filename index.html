@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Kelp Focus">
+<meta name="theme-color" content="#04121a">
+<title>Kelp Focus</title>
+<style>
+  :root { --bg:#04121a; --fg:#e6f4f1; --dim:#7fa3a8; --accent:#4fd1c5; --done:#f6c453; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif; }
+  body { display:flex; flex-direction:column;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  .video { position:relative; width:100%; aspect-ratio:16/9; background:#000; flex:none; }
+  .video iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
+  .video .empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:var(--dim); font-size:15px; text-align:center; padding:20px; }
+  .cams { display:flex; gap:8px; overflow-x:auto; padding:10px 14px; flex:none; scrollbar-width:none; }
+  .cams::-webkit-scrollbar { display:none; }
+  .chip { flex:none; border:1px solid #1d3a44; background:#0a2029; color:var(--fg); border-radius:999px;
+    padding:7px 13px; font-size:14px; }
+  .chip.on { background:var(--accent); color:#04121a; border-color:var(--accent); font-weight:600; }
+  .chip.add { color:var(--accent); }
+  .timer { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; padding:10px 16px 20px; }
+  .clock { font-size:min(26vw,120px); font-weight:200; font-variant-numeric:tabular-nums; letter-spacing:-2px; line-height:1; }
+  .clock.done { color:var(--done); animation:pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity:.35; } }
+  .bar { width:min(80vw,420px); height:4px; background:#12303a; border-radius:2px; overflow:hidden; }
+  .bar > div { height:100%; width:0; background:var(--accent); transition:width .5s linear; }
+  .presets { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  .preset { border:1px solid #1d3a44; background:transparent; color:var(--fg); border-radius:10px; padding:9px 14px; font-size:15px; }
+  .preset.on { border-color:var(--accent); color:var(--accent); }
+  .controls { display:flex; gap:12px; }
+  .btn { border:0; border-radius:14px; padding:14px 28px; font-size:17px; font-weight:600; }
+  .primary { background:var(--accent); color:#04121a; }
+  .ghost { background:#0f2a33; color:var(--fg); }
+  .status { color:var(--dim); font-size:13px; min-height:1em; text-align:center; }
+  dialog { background:#0a2029; color:var(--fg); border:1px solid #1d3a44; border-radius:16px; width:min(92vw,420px); padding:18px; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog h3 { margin:0 0 6px; font-size:17px; }
+  dialog p { margin:0 0 12px; color:var(--dim); font-size:13px; line-height:1.4; }
+  dialog input { width:100%; padding:11px; margin-bottom:10px; border-radius:10px; border:1px solid #1d3a44;
+    background:#04121a; color:var(--fg); font-size:16px; }
+  dialog .row { display:flex; gap:10px; justify-content:flex-end; }
+  dialog .err { color:#ff8a80; font-size:13px; min-height:1em; margin-bottom:8px; }
+  dialog .del { margin-right:auto; color:#ff8a80; background:transparent; }
+</style>
+</head>
+<body>
+  <div class="video" id="video"><div class="empty" id="empty">Tap <b>&nbsp;+ Add cam&nbsp;</b> and paste a YouTube livestream link.</div></div>
+  <div class="cams" id="cams"></div>
+
+  <div class="timer">
+    <div class="clock" id="clock">25:00</div>
+    <div class="bar"><div id="bar"></div></div>
+    <div class="presets" id="presets"></div>
+    <div class="controls">
+      <button class="btn primary" id="go">Start</button>
+      <button class="btn ghost" id="reset">Reset</button>
+    </div>
+    <div class="status" id="status">Video stays muted, so Spotify keeps playing.</div>
+  </div>
+
+  <dialog id="dlg">
+    <h3 id="dlgTitle">Add a cam</h3>
+    <p>Paste any YouTube link to the livestream (watch, youtu.be, or /live/ links all work). Long-press a cam later to edit or remove it.</p>
+    <input id="camName" placeholder="Name (e.g. Kelp)" autocomplete="off">
+    <input id="camUrl" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" autocapitalize="off">
+    <div class="err" id="err"></div>
+    <div class="row">
+      <button class="btn ghost del" id="del" hidden>Remove</button>
+      <button class="btn ghost" id="cancel">Cancel</button>
+      <button class="btn primary" id="save">Save</button>
+    </div>
+  </dialog>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+  };
+
+  // ---------- Cams ----------
+  let cams = store.get('kf.cams', []);
+  let current = store.get('kf.current', 0);
+  let editing = -1;
+
+  function parseId(s) {
+    s = (s || '').trim();
+    if (/^[\w-]{11}$/.test(s)) return s;
+    try {
+      const u = new URL(s);
+      if (u.hostname.includes('youtu.be')) return u.pathname.slice(1, 12);
+      if (u.searchParams.get('v')) return u.searchParams.get('v');
+      const m = u.pathname.match(/\/(live|embed|shorts)\/([\w-]{11})/);
+      if (m) return m[2];
+    } catch {}
+    return null;
+  }
+
+  function loadVideo() {
+    const v = $('video');
+    v.querySelectorAll('iframe').forEach(f => f.remove());
+    const cam = cams[current];
+    $('empty').hidden = !!cam;
+    if (!cam) return;
+    const f = document.createElement('iframe');
+    // Muted autoplay + inline: iOS lets this play without taking the audio session from Spotify.
+    f.src = `https://www.youtube-nocookie.com/embed/${cam.id}?autoplay=1&mute=1&playsinline=1&controls=1&rel=0&modestbranding=1`;
+    f.allow = 'autoplay; encrypted-media; picture-in-picture';
+    f.setAttribute('playsinline', '');
+    v.appendChild(f);
+  }
+
+  function renderCams() {
+    const c = $('cams'); c.innerHTML = '';
+    cams.forEach((cam, i) => {
+      const b = document.createElement('button');
+      b.className = 'chip' + (i === current ? ' on' : '');
+      b.textContent = cam.name;
+      let t;
+      const start = () => { t = setTimeout(() => { t = null; openDlg(i); }, 550); };
+      const end = e => { if (t) { clearTimeout(t); t = null; if (i !== current) { current = i; store.set('kf.current', i); renderCams(); loadVideo(); } } };
+      b.addEventListener('touchstart', start, { passive:true });
+      b.addEventListener('touchend', e => { e.preventDefault(); end(); });
+      b.addEventListener('touchmove', () => { clearTimeout(t); t = null; }, { passive:true });
+      b.addEventListener('mousedown', start);
+      b.addEventListener('mouseup', end);
+      b.addEventListener('contextmenu', e => e.preventDefault());
+      c.appendChild(b);
+    });
+    const add = document.createElement('button');
+    add.className = 'chip add'; add.textContent = '+ Add cam';
+    add.onclick = () => openDlg(-1);
+    c.appendChild(add);
+  }
+
+  function openDlg(i) {
+    editing = i;
+    const cam = cams[i];
+    $('dlgTitle').textContent = cam ? 'Edit cam' : 'Add a cam';
+    $('camName').value = cam ? cam.name : '';
+    $('camUrl').value = cam ? `https://www.youtube.com/watch?v=${cam.id}` : '';
+    $('err').textContent = '';
+    $('del').hidden = !cam;
+    $('dlg').showModal();
+  }
+  $('cancel').onclick = () => $('dlg').close();
+  $('save').onclick = () => {
+    const id = parseId($('camUrl').value);
+    if (!id) { $('err').textContent = "Couldn't find a video ID in that link."; return; }
+    const name = $('camName').value.trim() || `Cam ${cams.length + 1}`;
+    if (editing >= 0) cams[editing] = { name, id };
+    else { cams.push({ name, id }); current = cams.length - 1; }
+    store.set('kf.cams', cams); store.set('kf.current', current);
+    $('dlg').close(); renderCams(); loadVideo();
+  };
+  $('del').onclick = () => {
+    cams.splice(editing, 1);
+    if (current >= cams.length) current = Math.max(0, cams.length - 1);
+    store.set('kf.cams', cams); store.set('kf.current', current);
+    $('dlg').close(); renderCams(); loadVideo();
+  };
+
+  // ---------- Timer ----------
+  const PRESETS = [15, 25, 45, 60, 90];
+  let minutes = store.get('kf.minutes', 25);
+  let endAt = null;          // ms timestamp while running
+  let remaining = minutes * 60 * 1000; // ms while paused
+  let tick = null, wakeLock = null;
+
+  const fmt = ms => {
+    const s = Math.max(0, Math.ceil(ms / 1000));
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+    return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+  };
+
+  function renderPresets() {
+    const p = $('presets'); p.innerHTML = '';
+    PRESETS.forEach(m => {
+      const b = document.createElement('button');
+      b.className = 'preset' + (m === minutes ? ' on' : '');
+      b.textContent = m + 'm';
+      b.onclick = () => { minutes = m; store.set('kf.minutes', m); stop(); remaining = m * 60000; draw(); renderPresets(); };
+      p.appendChild(b);
+    });
+  }
+
+  function draw() {
+    const left = endAt ? endAt - Date.now() : remaining;
+    const total = minutes * 60000;
+    $('clock').textContent = fmt(left);
+    $('bar').style.width = Math.min(100, (1 - left / total) * 100) + '%';
+    document.title = endAt ? fmt(left) + ' · Kelp Focus' : 'Kelp Focus';
+    if (endAt && left <= 0) finish();
+  }
+
+  async function lock() {
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+  }
+  function unlock() { try { wakeLock && wakeLock.release(); } catch {} wakeLock = null; }
+
+  function start() {
+    if (remaining <= 0) remaining = minutes * 60000;
+    endAt = Date.now() + remaining;
+    $('clock').classList.remove('done');
+    $('go').textContent = 'Pause';
+    $('status').textContent = 'Focusing. Screen will stay on.';
+    tick = setInterval(draw, 250); lock(); draw();
+  }
+  function stop() {
+    if (endAt) remaining = Math.max(0, endAt - Date.now());
+    endAt = null; clearInterval(tick); tick = null; unlock();
+    $('go').textContent = 'Start';
+  }
+  function finish() {
+    stop(); remaining = 0;
+    $('clock').textContent = '0:00';
+    $('clock').classList.add('done');
+    $('bar').style.width = '100%';
+    $('status').textContent = 'Done. Take a break.';
+    document.title = '✓ Done · Kelp Focus';
+  }
+
+  $('go').onclick = () => endAt ? (stop(), $('status').textContent = 'Paused.') : start();
+  $('reset').onclick = () => {
+    stop(); remaining = minutes * 60000;
+    $('clock').classList.remove('done');
+    $('status').textContent = 'Video stays muted, so Spotify keeps playing.';
+    draw();
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { if (endAt) lock(); draw(); }
+  });
+
+  renderCams(); loadVideo(); renderPresets(); draw();
+})();
+</script>
